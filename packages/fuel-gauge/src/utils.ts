@@ -3,61 +3,83 @@ import type { Interface, JsonAbi, Contract, BytesLike, WalletUnlocked } from 'fu
 import { NativeAssetId, Provider, TestUtils, ContractFactory } from 'fuels';
 import { join } from 'path';
 
-let contractInstance: Contract;
-const deployContract = async (factory: ContractFactory, useCache: boolean = true) => {
-  if (contractInstance && useCache) return contractInstance;
-  contractInstance = await factory.deployContract();
-  return contractInstance;
-};
-
+/*
+  Wallet
+*/
 let walletInstance: WalletUnlocked;
-const createWallet = async () => {
+
+async function createWallet() {
   if (walletInstance) return walletInstance;
   const provider = new Provider('http://127.0.0.1:4000/graphql');
+
   walletInstance = await TestUtils.generateTestWallet(provider, [
     [5_000_000, NativeAssetId],
     [5_000_000, '0x0101010101010101010101010101010101010101010101010101010101010101'],
   ]);
-  return walletInstance;
-};
 
-export const getWallet = () => {
+  return walletInstance;
+}
+
+export async function getWallet() {
   if (walletInstance) {
     return walletInstance;
   }
-
   throw new Error('Wallet not created yet');
-};
+}
 
+/*
+  Contract
+*/
+let contractInstance: Contract;
+
+// instantiate and deploy contract
+async function deployContract(factory: ContractFactory, useCache: boolean = true) {
+  if (contractInstance && useCache) return contractInstance;
+  contractInstance = await factory.deployContract();
+  return contractInstance;
+}
+
+/*
+  Setup
+*/
 export type SetupConfig = {
   contractBytecode: BytesLike;
   abi: JsonAbi | Interface;
   cache?: boolean;
 };
 
-export const setup = async ({ contractBytecode, abi, cache }: SetupConfig) => {
-  // Create wallet
+// create wallet, instantiate contract, deploy and return it
+export async function setup({ contractBytecode, abi, cache }: SetupConfig) {
   const wallet = await createWallet();
   const factory = new ContractFactory(contractBytecode, abi, wallet);
   const contract = await deployContract(factory, cache);
   return contract;
-};
+}
 
-export const createSetupConfig =
-  (defaultConfig: SetupConfig) => async (config?: Partial<SetupConfig>) =>
-    setup({
+// wraps a setup call, allowing for overrides to be passed to it
+export function createSetupConfig(defaultConfig: SetupConfig) {
+  return async function wrappedSetup(config?: Partial<SetupConfig>) {
+    return setup({
       contractBytecode: defaultConfig.contractBytecode,
       abi: defaultConfig.abi,
       ...config,
     });
+  };
+}
 
-const getFullPath = (contractName: string, next: (fullPath: string) => () => Promise<Contract>) =>
-  next(join(__dirname, `../test-projects/${contractName}/out/debug/${contractName}`));
+// Read, group and return contract bytecode and abi
+export function readContractFiles(contractName: string): SetupConfig {
+  const c = contractName;
+  const fullPath = join(__dirname, `../test-projects/${c}/out/debug/${c}`);
 
-export const getSetupContract = (contractName: string) =>
-  getFullPath(contractName, (fullPath: string) =>
-    createSetupConfig({
-      contractBytecode: readFileSync(`${fullPath}.bin`),
-      abi: JSON.parse(readFileSync(`${fullPath}-abi.json`, 'utf8')),
-    })
-  );
+  return {
+    contractBytecode: readFileSync(`${fullPath}.bin`),
+    abi: JSON.parse(readFileSync(`${fullPath}-abi.json`, 'utf8')),
+  };
+}
+
+// Returns a wrapped setup method that, when called, will
+// create the wallet, deploy and return the contract
+export function getSetupContract(contractName: string) {
+  return createSetupConfig(readContractFiles(contractName));
+}
